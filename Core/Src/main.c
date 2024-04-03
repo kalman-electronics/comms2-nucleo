@@ -26,7 +26,7 @@
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
-/* USER CO.cproject.bakDE BEGIN Includes */
+/* USER CODE BEGIN Includes */
 #include <assert.h>
 #include "comms.h"
 /* USER CODE END Includes */

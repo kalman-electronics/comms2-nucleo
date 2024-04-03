@@ -125,8 +125,8 @@ void Error_Handler(void);
 #define ARD_D1_TX_GPIO_Port GPIOB
 #define ARD_D0_RX_Pin GPIO_PIN_7
 #define ARD_D0_RX_GPIO_Port GPIOB
-#define DIO1_Pin GPIO_PIN_8
-#define DIO1_GPIO_Port GPIOB
+#define DIO0_Pin GPIO_PIN_8
+#define DIO0_GPIO_Port GPIOB
 #define SPI_RST_Pin GPIO_PIN_9
 #define SPI_RST_GPIO_Port GPIOB
 

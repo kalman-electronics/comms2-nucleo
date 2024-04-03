@@ -191,10 +191,10 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PtPin */
-  GPIO_InitStruct.Pin = DIO1_Pin;
+  GPIO_InitStruct.Pin = DIO0_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(DIO1_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(DIO0_GPIO_Port, &GPIO_InitStruct);
 
 }
 

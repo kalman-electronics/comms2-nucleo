@@ -112,7 +112,7 @@ namespace radio::sx1278 {
 		template <typename RegAddr, typename RegValPtr>
 		bool SPI_burstRead(RegAddr addr, RegValPtr* val, uint8_t length);
 
-		void clear_irq_flags(IrqFlags flags);
+		void clear_irq_flags(IrqFlags flags = IrqFlags::All);
 
 	};
 

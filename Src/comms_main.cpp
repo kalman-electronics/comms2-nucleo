@@ -10,6 +10,10 @@ void comms_init() {
 
 }
 
+void rx_callback() {
+	HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+}
+
 void comms_main() {
 	PinoutConfig pinout_config = {
 		.spi_handle = &hspi1,
@@ -33,6 +37,8 @@ void comms_main() {
 		60
 	);
 
+	radio.on_rx = rx_callback;
+
 	if (status != Status::OK) {
 		while(1) {
 			HAL_GPIO_TogglePin(LED_RED_GPIO_Port, LED_RED_Pin);
@@ -45,7 +51,7 @@ void comms_main() {
 		uint8_t data[len];
 		memset(data, 0xFA, len);
 		
-		//radio.transmit(data, len);
+		radio.startTransmit(data, len);
 
 		HAL_Delay(5000);
 	}

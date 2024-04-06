@@ -151,7 +151,7 @@ void radio::sx1278::SX1278::reset() const {
  * @note The function sets the transceiver to STDBY mode, configures the FIFO address and payload length registers,
  *       writes the data to be transmitted to the FIFO, and then sets the transceiver to TX mode for transmission.
  */
-
+//TODO: change name
 void radio::sx1278::SX1278::startTransmit(uint8_t *data, uint8_t length) {
 	set_mode(lora::Mode::STDBY);
 
@@ -612,7 +612,7 @@ int radio::sx1278::SX1278::get_RSSI() {
  * This function clears interrupt flags in the SX1278 LoRa transceiver by writing 0xFF to the IrqFlags register.
  */
 
-void radio::sx1278::SX1278::clear_irq_flags(IrqFlags flags = IrqFlags::All) {
+void radio::sx1278::SX1278::clear_irq_flags(IrqFlags flags) {
 	SPI_write(lora::RegisterAddress::RegIrqFlags, static_cast<uint8_t>(flags));
 }
 

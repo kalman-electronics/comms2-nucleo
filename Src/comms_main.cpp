@@ -45,7 +45,7 @@ void comms_main() {
 		uint8_t data[len];
 		memset(data, 0xFA, len);
 		
-		radio.transmit(data, len);
+		//radio.transmit(data, len);
 
 		HAL_Delay(5000);
 	}

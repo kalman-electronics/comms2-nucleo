@@ -39,6 +39,18 @@ namespace radio::sx1278 {
 
 	};
 
+	enum IrqFlags {
+		All = 0xFF,
+		RxTimeout = 1 << 7,
+		RxDone = 1 << 6,
+		PayloadCrcError = 1 << 5,
+		ValidHeader = 1 << 4,
+		TxDone = 1 << 3,
+		CadDone = 1 << 2,
+		FhssChangeChannel = 1 << 1,
+		CadDetected = 1 << 0,
+	};
+
 	namespace lora {
 		/** LoRa specific registers **/
 		enum class RegisterAddress : uint8_t {

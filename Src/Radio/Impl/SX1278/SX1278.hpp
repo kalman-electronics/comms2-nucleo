@@ -53,8 +53,9 @@ namespace radio::sx1278 {
 
 		void reset() const;
 
-		void transmit(uint8_t* data, uint8_t length);
-		uint8_t receive(uint8_t* data, uint8_t length);
+		void startTransmit(uint8_t* data, uint8_t length);
+		void startReceive();
+		uint8_t getReceivedData(uint8_t* data, uint8_t length = 0);
 
 		void set_frequency(uint32_t frequency);
 		void set_power(lora::Power power);
@@ -73,13 +74,28 @@ namespace radio::sx1278 {
 		uint8_t get_version();
 		lora::Mode get_mode();
 
-
+		void(*on_rx)(void) = nullptr;
 	private:
 		/** Hardware **/
 		PinoutConfig pinout_config;
 
 		/** Module settings **/
-		lora::Mode current_mode = lora::Mode::SLEEP;
+		lora::Mode _current_mode;
+		uint32_t _frequency;
+		lora::Power _power;
+		lora::SpreadingFactor _spreading_factor;
+		lora::Bandwidth _bandwidth;
+		lora::CodingRate _coding_rate;
+		lora::HeaderMode _header_mode;
+		lora::LNAGain _lna_gain;
+		lora::PayloadCRC _crc;
+		uint16_t _preamble_length;
+		uint16_t _timeout;
+		uint8_t _max_current;
+
+		void _handle_txdone_irq();
+		void _handle_rxdone_irq();
+		void _on_dio0_irq();
 
 		//TODO: add other settings, figure how to store them separately for FSK and LORA
 
@@ -93,7 +109,10 @@ namespace radio::sx1278 {
 		template<typename RegVal, typename RegAddr>
 		etl::optional<RegVal> SPI_read(RegAddr reg);
 
-		void clear_irq_flags();
+		template <typename RegAddr, typename RegValPtr>
+		bool SPI_burstRead(RegAddr addr, RegValPtr* val, uint8_t length);
+
+		void clear_irq_flags(IrqFlags flags);
 
 	};
 

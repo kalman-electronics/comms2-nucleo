@@ -105,6 +105,25 @@ etl::optional<RegVal> radio::sx1278::SX1278::SPI_read(RegAddr reg) {
 	return etl::nullopt;
 }
 
+template <typename RegAddr, typename RegValPtr>
+bool radio::sx1278::SX1278::SPI_burstRead(RegAddr addr, RegValPtr* val, uint8_t length) {
+	static_assert(sizeof(RegAddr) == 1, "Register address must be 1 byte long");
+	static_assert(sizeof(RegValPtr) == 1, "Pointer to Register values must be 1 byte long");
+
+	uint8_t address = static_cast<uint8_t>(addr) & 0x7F; /** set MSB to 0 to indicate read **/
+
+	HAL_GPIO_WritePin(pinout_config.NSS.GPIOPort, pinout_config.NSS.GPIOPin, GPIO_PIN_RESET);
+
+	HAL_SPI_Transmit(pinout_config.spi_handle, &address, sizeof(address), HAL_MAX_DELAY); /** send address **/
+	while(HAL_SPI_GetState(pinout_config.spi_handle) != HAL_SPI_STATE_READY); /** wait for SPI to finish **/
+	auto status = HAL_SPI_Receive(pinout_config.spi_handle, val, length, HAL_MAX_DELAY);
+	while(HAL_SPI_GetState(pinout_config.spi_handle) != HAL_SPI_STATE_READY); /** wait for SPI to finish **/
+
+	HAL_GPIO_WritePin(pinout_config.NSS.GPIOPort, pinout_config.NSS.GPIOPin, GPIO_PIN_SET);
+
+	return status == HAL_OK;
+}
+
 /**
  * @brief Resets the SX1278 LoRa transceiver.
  *
@@ -124,7 +143,7 @@ void radio::sx1278::SX1278::reset() const {
 /**
  * @brief Transmits data using the SX1278 LoRa transceiver.
  *
- * This function prepares and transmits data using the SX1278 LoRa transceiver.
+ * This function prepares and requests data transmission using the SX1278 LoRa transceiver.
  *
  * @param data A pointer to the data to be transmitted.
  * @param length The length of the data to be transmitted.
@@ -133,13 +152,10 @@ void radio::sx1278::SX1278::reset() const {
  *       writes the data to be transmitted to the FIFO, and then sets the transceiver to TX mode for transmission.
  */
 
-void radio::sx1278::SX1278::transmit(uint8_t *data, uint8_t length) {
-	uint8_t read;
-
+void radio::sx1278::SX1278::startTransmit(uint8_t *data, uint8_t length) {
 	set_mode(lora::Mode::STDBY);
 
-	read = SPI_read<uint8_t>(lora::RegisterAddress::RegFifoTxBaseAddr).value();
-	SPI_write(lora::RegisterAddress::RegFifoAddrPtr, read);
+	SPI_write(lora::RegisterAddress::RegFifoAddrPtr, static_cast<uint8_t>(0x00)); // Always use entire FIFO for TX
 	SPI_write(lora::RegisterAddress::RegPayloadLength, length);
 	SPI_BurstWrite(RegisterAddress::RegFifo, data, length);
 
@@ -162,26 +178,43 @@ void radio::sx1278::SX1278::transmit(uint8_t *data, uint8_t length) {
  * @note The function sets the transceiver back to RXCONTINUOUS mode and returns the number of bytes received.
  */
 
-uint8_t radio::sx1278::SX1278::receive(uint8_t* data, uint8_t length) {
-	uint8_t read, number_of_bytes, min = 0;
+// TODO: check IRQ mask
+// TODO: PA ramp up time set
 
-	memset(data, 0, length);
-
-	set_mode(lora::Mode::STDBY);
-	read = SPI_read<uint8_t>(lora::RegisterAddress::RegIrqFlags).value();
-	if((read & 0x40) != 0) {
-		clear_irq_flags();
-		number_of_bytes = SPI_read<uint8_t>(lora::RegisterAddress::RegRxNbBytes).value();
-		read = SPI_read<uint8_t>(lora::RegisterAddress::RegFiFoRxCurrentAddr).value();
-		SPI_write(lora::RegisterAddress::RegFifoAddrPtr, read);
-		min = length >= number_of_bytes ? number_of_bytes : length;
-
-		for(int i = 0; i < min; i++) {
-			data[i] = SPI_read<uint8_t>(RegisterAddress::RegFifo).value();
-		}
-	}
+void radio::sx1278::SX1278::startReceive() {
 	set_mode(lora::Mode::RXCONTINUOUS);
-	return min;
+}
+
+// Should only be called after RxDone
+uint8_t radio::sx1278::SX1278::getReceivedData(uint8_t* data, uint8_t length) {
+	// TODO: packet crc check
+	// TODO: header crc check
+	auto irq_flags = static_cast<IrqFlags>(SPI_read<uint8_t>(lora::RegisterAddress::RegIrqFlags).value());
+
+	if (!(irq_flags & IrqFlags::RxDone))
+		return 0; // TODO: error handling
+
+	// TODO: notify about CRC error
+
+	if (this->_header_mode == lora::HeaderMode::IMPLICIT && length == 0)
+		return 0; // TODO: error handling, unknown length
+		
+	if (this->_header_mode == lora::HeaderMode::EXPLICIT) {
+		length = SPI_read<uint8_t>(lora::RegisterAddress::RegRxNbBytes).value();
+	}
+
+	auto read = SPI_read<uint8_t>(lora::RegisterAddress::RegFiFoRxCurrentAddr).value();
+	SPI_write(lora::RegisterAddress::RegFifoAddrPtr, read);
+
+	SPI_burstRead(RegisterAddress::RegFifo, data, length);
+
+	// for(int i = 0; i < length; i++) {
+	// 	data[i] = SPI_read<uint8_t>(RegisterAddress::RegFifo).value();
+	// }
+	
+	clear_irq_flags();
+
+	return length;
 }
 
 /**
@@ -197,14 +230,13 @@ uint8_t radio::sx1278::SX1278::receive(uint8_t* data, uint8_t length) {
  */
 
 void radio::sx1278::SX1278::set_frequency(uint32_t frequency) {
-	uint32_t F;
-
-	/** Formula from datasheet **/
-	F = (frequency * 524288) >> 5;
+	uint32_t F = (frequency * 524288) >> 5;
 
 	SPI_write(RegisterAddress::RegFrMsb, static_cast<uint8_t>((F >> 16) & 0xFF));
 	SPI_write(RegisterAddress::RegFrMid, static_cast<uint8_t>((F >> 8) & 0xFF));
 	SPI_write(RegisterAddress::RegFrLsb, static_cast<uint8_t>(F & 0xFF));
+
+	this->_frequency = frequency;
 }
 
 /**
@@ -221,13 +253,39 @@ void radio::sx1278::SX1278::set_frequency(uint32_t frequency) {
  */
 
 void radio::sx1278::SX1278::set_spreading_factor(radio::sx1278::lora::SpreadingFactor spreading_factor) {
-	auto reg_value = SPI_read<uint8_t>(lora::RegisterAddress::RegModemConfig2);
-
-	if(reg_value.has_value()) {
-		reg_value.value() &= 0x0F; /** clear SF bits **/
-		reg_value.value() |= static_cast<uint8_t>(spreading_factor) << 4; /** set SF bits **/
-		SPI_write(lora::RegisterAddress::RegModemConfig2, reg_value.value());
+	auto config_reg = SPI_read<uint8_t>(lora::RegisterAddress::RegModemConfig2);
+	if(!config_reg.has_value()) {
+		// TODO: Error handling
 	}
+
+	config_reg.value() &= 0x0F; /** clear SF bits **/
+	config_reg.value() |= static_cast<uint8_t>(spreading_factor) << 4; /** set SF bits **/
+	SPI_write(lora::RegisterAddress::RegModemConfig2, config_reg.value());
+
+	auto detect_reg = SPI_read<uint8_t>(lora::RegisterAddress::RegDetectOptimize);
+	if(!detect_reg.has_value()) {
+		// TODO: Error handling
+	}
+
+	// SF6 required optimization
+	if (spreading_factor == lora::SpreadingFactor::SF_6) {
+		set_header_mode(lora::HeaderMode::IMPLICIT);
+		SPI_write(lora::RegisterAddress::RegDetectionThreshold, static_cast<uint8_t>(0x0C));
+
+		// Set DetectionOptimize field to 0x05
+		detect_reg.value() &= ~0b111;
+		detect_reg.value() |= 0x05;
+		SPI_write(lora::RegisterAddress::RegDetectOptimize, detect_reg.value());
+	} else {
+		SPI_write(lora::RegisterAddress::RegDetectionThreshold, static_cast<uint8_t>(0x0A));
+
+		// Set DetectionOptimize field to 0x03
+		detect_reg.value() &= ~0b111;
+		detect_reg.value() |= 0x03;
+		SPI_write(lora::RegisterAddress::RegDetectOptimize, detect_reg.value());
+	}
+
+	this->_spreading_factor = spreading_factor;
 }
 
 /**
@@ -251,6 +309,8 @@ void radio::sx1278::SX1278::set_bandwidth(radio::sx1278::lora::Bandwidth bandwid
 		reg_value.value() |= static_cast<uint8_t>(bandwidth) << 4; /** set BW bits **/
 		SPI_write(lora::RegisterAddress::RegModemConfig1, reg_value.value());
 	}
+
+	this->_bandwidth = bandwidth;
 }
 
 /**
@@ -270,19 +330,20 @@ void radio::sx1278::SX1278::set_mode(radio::sx1278::lora::Mode mode) {
 	auto reg_value = SPI_read<uint8_t>(RegisterAddress::RegOpMode);
 
 	if(reg_value.has_value()) {
-
-		if(mode == lora::Mode::TX) {
-			SPI_write(RegisterAddress::RegDioMapping1, static_cast<uint8_t>(0x40)); /** set DIO0 to TxDone **/
-		} else if(mode == lora::Mode::RXCONTINUOUS) {
-			SPI_write(RegisterAddress::RegDioMapping1, static_cast<uint8_t>(0x00)); /** set DIO0 to RxDone **/
-		}
-
-		reg_value.value() &= 0xF8; /** clear mode bits **/
-		reg_value.value() |= static_cast<uint8_t>(mode); /** set mode bits **/
-		SPI_write(RegisterAddress::RegOpMode, reg_value.value());
-		current_mode = mode;
+		// TODO: error handling
 	}
 
+	if(mode == lora::Mode::TX) {
+		SPI_write(RegisterAddress::RegDioMapping1, static_cast<uint8_t>(0x40)); /** set DIO0 to TxDone **/
+	} else if(mode == lora::Mode::RXCONTINUOUS) {
+		SPI_write(RegisterAddress::RegDioMapping1, static_cast<uint8_t>(0x00)); /** set DIO0 to RxDone **/
+	}
+
+	reg_value.value() &= 0xF8; /** clear mode bits **/
+	reg_value.value() |= static_cast<uint8_t>(mode); /** set mode bits **/
+	SPI_write(RegisterAddress::RegOpMode, reg_value.value());
+
+	this->_current_mode = mode;
 }
 
 /**
@@ -309,6 +370,7 @@ void radio::sx1278::SX1278::set_payload_crc(lora::PayloadCRC crc) {
 		SPI_write(lora::RegisterAddress::RegModemConfig2, reg_value.value());
 	}
 
+	this->_crc = crc;
 }
 
 /**
@@ -341,6 +403,8 @@ void radio::sx1278::SX1278::set_ocp(uint8_t max_current) {
 	}
 
 	SPI_write(RegisterAddress::RegOcp, ocp_trim);
+
+	this->_max_current = max_current;
 }
 
 /**
@@ -353,13 +417,15 @@ void radio::sx1278::SX1278::set_ocp(uint8_t max_current) {
 
 void radio::sx1278::SX1278::set_power(lora::Power power) {
 	SPI_write(RegisterAddress::RegPaConfig, static_cast<uint8_t>(power));
+
+	this->_power = power;
 }
 
 /**
  * @brief Sets the preamble length for LoRa communication in the SX1278 LoRa transceiver.
  *
  * This function sets the preamble length for LoRa communication in the SX1278 LoRa transceiver
- * by configuring the PreambleMsb and PreambleLsb registers.
+ * by configuring the Pthis->_coding_rate = coding_rate;reambleMsb and PreambleLsb registers.
  *
  * @param preamble_length The desired preamble length in number of symbols.
  *
@@ -368,8 +434,12 @@ void radio::sx1278::SX1278::set_power(lora::Power power) {
  */
 
 void radio::sx1278::SX1278::set_preamble_length(uint16_t preamble_length) {
+	assert(preamble_length >= 6); // TODO: better error handling
+
 	SPI_write(lora::RegisterAddress::RegPreambleMsb, static_cast<uint8_t>((preamble_length >> 8) & 0xFF));
 	SPI_write(lora::RegisterAddress::RegPreambleLsb, static_cast<uint8_t>(preamble_length & 0xFF));
+
+	this->_preamble_length = preamble_length;
 }
 
 /**
@@ -393,6 +463,8 @@ void radio::sx1278::SX1278::set_coding_rate(radio::sx1278::lora::CodingRate codi
 		reg_value.value() |= static_cast<uint8_t>(coding_rate) << 1; /** set CR bits **/
 		SPI_write(lora::RegisterAddress::RegModemConfig1, reg_value.value());
 	}
+
+	this->_coding_rate = coding_rate;
 }
 
 /**
@@ -418,6 +490,7 @@ void radio::sx1278::SX1278::set_timeout(uint16_t timeout) {
 		SPI_write(lora::RegisterAddress::RegModemConfig2, read.value());
 	}
 
+	this->_timeout = timeout;
 }
 
 
@@ -426,7 +499,7 @@ void radio::sx1278::SX1278::set_timeout(uint16_t timeout) {
  *
  * This function sets the header mode for LoRa communication in the SX1278 LoRa transceiver
  * by configuring the ModemConfig1 register.
- *
+ *startReceive
  * @param header_mode The desired header mode to be set (EXPLICIT or IMPLICIT).
  *
  * @note The current value of the ModemConfig1 register is read, and the header mode bit is updated
@@ -437,15 +510,22 @@ void radio::sx1278::SX1278::set_timeout(uint16_t timeout) {
 void radio::sx1278::SX1278::set_header_mode(radio::sx1278::lora::HeaderMode header_mode) {
 	auto reg_value = SPI_read<uint8_t>(lora::RegisterAddress::RegModemConfig1);
 
-	if(reg_value.has_value()) {
-		if(header_mode == lora::HeaderMode::EXPLICIT) {
-			reg_value.value() &= 0xFE;
-		} else {
-			reg_value.value() |= 0x01;
-		}
-		SPI_write(lora::RegisterAddress::RegModemConfig1, reg_value.value());
+	if(!(reg_value.has_value())) {
+		// TODO: error handling
 	}
 
+	// SF6 requires implicit header mode
+	if(this->_spreading_factor == lora::SpreadingFactor::SF_6)
+		header_mode = lora::HeaderMode::IMPLICIT;
+
+	if(header_mode == lora::HeaderMode::EXPLICIT) {
+		reg_value.value() &= 0xFE;
+	} else {
+		reg_value.value() |= 0x01;
+	}
+	SPI_write(lora::RegisterAddress::RegModemConfig1, reg_value.value());
+
+	this->_header_mode = header_mode;
 }
 
 /**
@@ -461,6 +541,7 @@ void radio::sx1278::SX1278::set_header_mode(radio::sx1278::lora::HeaderMode head
  * @note The updated value is then written back to the Lna register.
  */
 
+// TODO: crosscheck how and if this function is necessary in user facing format
 void radio::sx1278::SX1278::set_lna_gain(radio::sx1278::lora::LNAGain lna_gain) {
 	auto reg_value = SPI_read<uint8_t>(RegisterAddress::RegLna);
 
@@ -469,6 +550,8 @@ void radio::sx1278::SX1278::set_lna_gain(radio::sx1278::lora::LNAGain lna_gain) 
 		reg_value.value() |= static_cast<uint8_t>(lna_gain) << 5;
 		SPI_write(RegisterAddress::RegLna, reg_value.value());
 	}
+
+	this->_lna_gain = lna_gain;
 }
 
 /**
@@ -479,7 +562,7 @@ void radio::sx1278::SX1278::set_lna_gain(radio::sx1278::lora::LNAGain lna_gain) 
  * @return The current operating mode as a value from the lora::Mode enum.
  */
 radio::sx1278::lora::Mode radio::sx1278::SX1278::get_mode() {
-	return current_mode;
+	return _current_mode;
 }
 
 /**
@@ -529,8 +612,8 @@ int radio::sx1278::SX1278::get_RSSI() {
  * This function clears interrupt flags in the SX1278 LoRa transceiver by writing 0xFF to the IrqFlags register.
  */
 
-void radio::sx1278::SX1278::clear_irq_flags() {
-	SPI_write(lora::RegisterAddress::RegIrqFlags, static_cast<uint8_t>(0xFF));
+void radio::sx1278::SX1278::clear_irq_flags(IrqFlags flags = IrqFlags::All) {
+	SPI_write(lora::RegisterAddress::RegIrqFlags, static_cast<uint8_t>(flags));
 }
 
 
@@ -608,7 +691,7 @@ radio::sx1278::Status radio::sx1278::SX1278::init(
 	/** Set OCP **/
 	set_ocp(max_current);
 
-	/** Set header mode **/
+	/** Set header mode **/		
 	set_header_mode(header_mode);
 
 	/** Set LNA gain **/
@@ -619,17 +702,40 @@ radio::sx1278::Status radio::sx1278::SX1278::init(
 	read |= 0x3F;
 	SPI_write(RegisterAddress::RegDioMapping1, read);
 
+	/** RX/TX FIFO **/
+	// We always use the entire FIFO for TX/RX operation
+	SPI_write(lora::RegisterAddress::RegFifoRxBaseAddr, static_cast<uint8_t>(0x00));
+	SPI_write(lora::RegisterAddress::RegFifoTxBaseAddr, static_cast<uint8_t>(0x00));
 
 	/** Set mode to standby **/
 	set_mode(lora::Mode::STDBY);
 
 	if(get_version() == 0x12) {
-		/** Set mode to RXCONTINUOUS **/
 		return Status::OK;
 
 	} else {
-		/** Set mode to RXSINGLE **/
 		return Status::ERROR;
 	}
 
+}
+
+void radio::sx1278::SX1278::_on_dio0_irq() {
+	// TODO: call RX DONE handler and stop radio
+	if (this->_current_mode == lora::Mode::TX) {
+		this->_handle_txdone_irq();
+	}
+	else if (this->_current_mode == lora::Mode::RXCONTINUOUS) {		
+		this->_handle_rxdone_irq();
+	}
+}
+
+void radio::sx1278::SX1278::_handle_txdone_irq() {
+	this->set_mode(lora::Mode::RXCONTINUOUS);
+}
+
+void radio::sx1278::SX1278::_handle_rxdone_irq() {
+	if (this->on_rx != nullptr)
+		this->on_rx();
+
+	this->startReceive();
 }

@@ -719,7 +719,7 @@ radio::sx1278::Status radio::sx1278::SX1278::init(
 
 }
 
-void radio::sx1278::SX1278::_on_dio0_irq() {
+void radio::sx1278::SX1278::on_dio0_irq() {
 	// TODO: call RX DONE handler and stop radio
 	if (this->_current_mode == lora::Mode::TX) {
 		this->_handle_txdone_irq();

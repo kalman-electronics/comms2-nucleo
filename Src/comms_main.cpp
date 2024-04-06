@@ -13,7 +13,7 @@ PinoutConfig pinout_config = {
 	.DIO0 = {DIO0_GPIO_Port, DIO0_Pin}
 };
 
-SX1278 radio(pinout_config);
+SX1278 sx_radio(pinout_config);
 
 void comms_init() {
 
@@ -24,7 +24,7 @@ void rx_callback() {
 }
 
 void comms_main() {
-	auto status = radio.init(
+	auto status = sx_radio.init(
 		433UL,
 		lora::Power::POWER_17_DB,
 		lora::SpreadingFactor::SF_6,
@@ -37,7 +37,7 @@ void comms_main() {
 		60
 	);
 
-	radio.on_rx = rx_callback;
+	sx_radio.on_rx = rx_callback;
 
 	if (status != Status::OK) {
 		while(1) {
@@ -51,7 +51,7 @@ void comms_main() {
 		uint8_t data[len];
 		memset(data, 0xFA, len);
 		
-		radio.startTransmit(data, len);
+		sx_radio.startTransmit(data, len);
 
 		HAL_Delay(5000);
 	}
@@ -59,7 +59,7 @@ void comms_main() {
 
 extern "C" __weak void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == DIO0_Pin) {
-		radio.on_dio0_irq();
+		sx_radio.on_dio0_irq();
 		HAL_GPIO_TogglePin(LED_YELLOW_GPIO_Port, LED_YELLOW_Pin);
 	}
 }

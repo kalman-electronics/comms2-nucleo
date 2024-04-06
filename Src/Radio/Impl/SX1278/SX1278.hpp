@@ -73,6 +73,7 @@ namespace radio::sx1278 {
 		int get_RSSI();
 		uint8_t get_version();
 		lora::Mode get_mode();
+		void on_dio0_irq();
 
 		void(*on_rx)(void) = nullptr;
 	private:
@@ -95,7 +96,6 @@ namespace radio::sx1278 {
 
 		void _handle_txdone_irq();
 		void _handle_rxdone_irq();
-		void _on_dio0_irq();
 
 		//TODO: add other settings, figure how to store them separately for FSK and LORA
 

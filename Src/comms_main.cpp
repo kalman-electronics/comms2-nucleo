@@ -6,6 +6,15 @@
 #include "Radio/Impl/SX1278/SX1278.hpp"
 using namespace radio::sx1278;
 
+PinoutConfig pinout_config = {
+	.spi_handle = &hspi1,
+	.NSS = {SPI_CS_GPIO_Port, SPI_CS_Pin},
+	.RESET = {SPI_RST_GPIO_Port, SPI_RST_Pin},
+	.DIO0 = {DIO0_GPIO_Port, DIO0_Pin}
+};
+
+SX1278 radio(pinout_config);
+
 void comms_init() {
 
 }
@@ -15,15 +24,6 @@ void rx_callback() {
 }
 
 void comms_main() {
-	PinoutConfig pinout_config = {
-		.spi_handle = &hspi1,
-		.NSS = {SPI_CS_GPIO_Port, SPI_CS_Pin},
-		.RESET = {SPI_RST_GPIO_Port, SPI_RST_Pin},
-		.DIO0 = {DIO0_GPIO_Port, DIO0_Pin}
-	};
-
-	SX1278 radio(pinout_config);
-
 	auto status = radio.init(
 		433UL,
 		lora::Power::POWER_17_DB,
@@ -54,5 +54,12 @@ void comms_main() {
 		radio.startTransmit(data, len);
 
 		HAL_Delay(5000);
+	}
+}
+
+extern "C" __weak void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == DIO0_Pin) {
+		radio.on_dio0_irq();
+		HAL_GPIO_TogglePin(LED_YELLOW_GPIO_Port, LED_YELLOW_Pin);
 	}
 }
